@@ -60,6 +60,8 @@ const requireVoter = (req, res, next) => {
 
 module.exports = {
   authenticateToken,
+  authMiddleware: authenticateToken, // Alias for consistency
   requireAdmin,
+  adminOnly: requireAdmin, // Alias for consistency
   requireVoter,
 };

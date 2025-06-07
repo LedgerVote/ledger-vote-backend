@@ -70,7 +70,34 @@ const validateRegister = (req, res, next) => {
   next();
 };
 
+const validateSession = (req, res, next) => {
+  const schema = Joi.object({
+    title: Joi.string().min(3).max(255).required().messages({
+      "string.min": "Title must be at least 3 characters long",
+      "string.max": "Title cannot exceed 255 characters",
+      "any.required": "Title is required",
+    }),
+    description: Joi.string().max(1000).optional().messages({
+      "string.max": "Description cannot exceed 1000 characters",
+    }),
+    endDate: Joi.date().greater("now").required().messages({
+      "date.greater": "End date must be in the future",
+      "any.required": "End date is required",
+    }),
+  });
+
+  const { error } = schema.validate(req.body);
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.details[0].message,
+    });
+  }
+  next();
+};
+
 module.exports = {
   validateLogin,
   validateRegister,
+  validateSession,
 };
