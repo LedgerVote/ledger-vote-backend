@@ -93,8 +93,9 @@ const getAdminSessions = async (req, res) => {
     const { page = 1, limit = 10, status = "all" } = req.query;
     const offset = (page - 1) * limit;
 
-    let whereClause = "WHERE vs.admin_id = ?";
-    let queryParams = [adminId];
+    // Admin users can see ALL sessions in the system, not just their own
+    let whereClause = "WHERE 1=1";
+    let queryParams = [];
 
     if (status === "active") {
       whereClause += " AND vs.is_active = TRUE AND vs.end_date > NOW()";
@@ -149,19 +150,19 @@ const getSessionDetails = async (req, res) => {
     const { sessionId } = req.params;
     const adminId = req.user.id;
 
-    // Verify admin owns this session
+    // Admin users can access details for any session in the system
     const [sessions] = await pool.execute(
       `SELECT vs.*, u.first_name, u.last_name 
        FROM voting_sessions vs
        JOIN users u ON vs.admin_id = u.id
-       WHERE vs.id = ? AND vs.admin_id = ?`,
-      [sessionId, adminId]
+       WHERE vs.id = ?`,
+      [sessionId]
     );
 
     if (sessions.length === 0) {
       return res.status(404).json({
         success: false,
-        message: "Session not found or access denied",
+        message: "Session not found",
       });
     } // Get session voters
     const [rawVoters] = await pool.execute(
@@ -217,16 +218,16 @@ const uploadVoters = async (req, res) => {
     const { sessionId } = req.params;
     const adminId = req.user.id;
 
-    // Verify admin owns this session
+    // Admin users can upload voters to any session in the system
     const [sessions] = await pool.execute(
-      `SELECT id FROM voting_sessions WHERE id = ? AND admin_id = ?`,
-      [sessionId, adminId]
+      `SELECT id FROM voting_sessions WHERE id = ?`,
+      [sessionId]
     );
 
     if (sessions.length === 0) {
       return res.status(404).json({
         success: false,
-        message: "Session not found or access denied",
+        message: "Session not found",
       });
     }
 
@@ -374,10 +375,143 @@ const uploadVoters = async (req, res) => {
   }
 };
 
+// Get voters for a specific session
+const getSessionVoters = async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const {
+      page = 1,
+      limit = 50,
+      search = "",
+      status = "all",
+      sortBy = "name",
+      sortOrder = "asc",
+    } = req.query;
+    const offset = (page - 1) * limit;
+
+    // Verify session exists
+    const [sessions] = await pool.execute(
+      `SELECT id FROM voting_sessions WHERE id = ?`,
+      [sessionId]
+    );
+
+    if (sessions.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Session not found",
+      });
+    }
+
+    let whereClause = "WHERE sv.session_id = ?";
+    let queryParams = [sessionId];
+
+    if (search) {
+      whereClause +=
+        " AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)";
+      const searchPattern = `%${search}%`;
+      queryParams.push(searchPattern, searchPattern, searchPattern);
+    }
+
+    if (status === "approved") {
+      whereClause += " AND u.is_verified = TRUE";
+    } else if (status === "pending") {
+      whereClause += " AND u.is_verified = FALSE";
+    } else if (status === "active") {
+      whereClause += " AND u.is_active = TRUE";
+    } else if (status === "inactive") {
+      whereClause += " AND u.is_active = FALSE";
+    }
+
+    // Define sorting
+    let orderClause = "ORDER BY ";
+    switch (sortBy) {
+      case "name":
+        orderClause += `u.first_name ${sortOrder}, u.last_name ${sortOrder}`;
+        break;
+      case "email":
+        orderClause += `u.email ${sortOrder}`;
+        break;
+      case "status":
+        orderClause += `u.is_verified ${sortOrder}`;
+        break;
+      case "created":
+        orderClause += `u.created_at ${sortOrder}`;
+        break;
+      default:
+        orderClause += "u.first_name ASC, u.last_name ASC";
+    } // Get session voters with enhanced data
+    const [voters] = await pool.execute(
+      `SELECT sv.*, u.id as user_id, u.email, u.first_name, u.last_name, 
+              u.is_verified, u.is_active, u.wallet_address, u.created_at,
+              sv.has_voted, sv.voted_at,
+              CASE 
+                WHEN u.is_verified = TRUE THEN 'approved'
+                ELSE 'pending'
+              END as status
+       FROM session_voters sv
+       JOIN users u ON sv.voter_id = u.id
+       ${whereClause}
+       ${orderClause}
+       LIMIT ? OFFSET ?`,
+      [...queryParams, parseInt(limit), parseInt(offset)]
+    );
+
+    // Get total count
+    const [countResult] = await pool.execute(
+      `SELECT COUNT(*) as total 
+       FROM session_voters sv
+       JOIN users u ON sv.voter_id = u.id
+       ${whereClause}`,
+      queryParams
+    ); // Transform data for frontend compatibility
+    const transformedVoters = voters.map((voter) => ({
+      id: voter.voter_id,
+      user_id: voter.user_id,
+      name: `${voter.first_name} ${voter.last_name}`,
+      email: voter.email,
+      status: voter.status,
+      is_verified: voter.is_verified,
+      is_active: voter.is_active,
+      wallet_address: voter.wallet_address,
+      has_voted: voter.has_voted,
+      voted_at: voter.voted_at,
+      createdAt: voter.created_at,
+      // Keep original fields for compatibility
+      voter_id: voter.voter_id,
+      first_name: voter.first_name,
+      last_name: voter.last_name,
+    }));
+
+    res.json({
+      success: true,
+      voters: transformedVoters,
+      pagination: {
+        current_page: parseInt(page),
+        per_page: parseInt(limit),
+        total: countResult[0].total,
+        total_pages: Math.ceil(countResult[0].total / limit),
+      },
+    });
+  } catch (error) {
+    console.error("Get session voters error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch session voters",
+    });
+  }
+};
+
 // Get all voters for admin management
 const getAllVoters = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search = "", status = "all" } = req.query;
+    const {
+      page = 1,
+      limit = 10,
+      search = "",
+      status = "all",
+      sortBy = "created",
+      sortOrder = "desc",
+    } = req.query;
     const offset = (page - 1) * limit;
 
     let whereClause = "WHERE u.user_type = 'voter'";
@@ -400,6 +534,25 @@ const getAllVoters = async (req, res) => {
       whereClause += " AND u.is_active = FALSE";
     }
 
+    // Define sorting
+    let orderClause = "ORDER BY ";
+    switch (sortBy) {
+      case "name":
+        orderClause += `u.first_name ${sortOrder}, u.last_name ${sortOrder}`;
+        break;
+      case "email":
+        orderClause += `u.email ${sortOrder}`;
+        break;
+      case "status":
+        orderClause += `u.is_verified ${sortOrder}`;
+        break;
+      case "created":
+        orderClause += `u.created_at ${sortOrder}`;
+        break;
+      default:
+        orderClause += "u.created_at DESC";
+    }
+
     // Get voters with their session participation count
     const [voters] = await pool.execute(
       `SELECT u.id, u.email, u.first_name, u.last_name, u.is_verified, u.is_active, 
@@ -410,7 +563,7 @@ const getAllVoters = async (req, res) => {
        LEFT JOIN session_voters sv ON u.id = sv.voter_id
        ${whereClause}
        GROUP BY u.id
-       ORDER BY u.created_at DESC
+       ${orderClause}
        LIMIT ? OFFSET ?`,
       [...queryParams, parseInt(limit), parseInt(offset)]
     );
@@ -436,6 +589,258 @@ const getAllVoters = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch voters",
+    });
+  }
+};
+
+// Bulk actions for voters
+const bulkVoterActions = async (req, res) => {
+  try {
+    const { action, voterIds, sessionId } = req.body;
+
+    if (!Array.isArray(voterIds) || voterIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Voter IDs array is required",
+      });
+    }
+
+    if (
+      !["approve", "reject", "remove", "activate", "deactivate"].includes(
+        action
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Invalid action. Allowed: approve, reject, remove, activate, deactivate",
+      });
+    }
+
+    let result;
+    let message;
+
+    switch (action) {
+      case "approve":
+        const placeholders = voterIds.map(() => "?").join(",");
+        [result] = await pool.execute(
+          `UPDATE users SET is_verified = 1 WHERE id IN (${placeholders}) AND user_type = 'voter'`,
+          voterIds
+        );
+        message = `${result.affectedRows} voters approved`;
+        break;
+
+      case "reject":
+        const placeholders2 = voterIds.map(() => "?").join(",");
+        [result] = await pool.execute(
+          `UPDATE users SET is_verified = 0 WHERE id IN (${placeholders2}) AND user_type = 'voter'`,
+          voterIds
+        );
+        message = `${result.affectedRows} voters rejected`;
+        break;
+
+      case "activate":
+        const placeholders3 = voterIds.map(() => "?").join(",");
+        [result] = await pool.execute(
+          `UPDATE users SET is_active = 1 WHERE id IN (${placeholders3}) AND user_type = 'voter'`,
+          voterIds
+        );
+        message = `${result.affectedRows} voters activated`;
+        break;
+
+      case "deactivate":
+        const placeholders4 = voterIds.map(() => "?").join(",");
+        [result] = await pool.execute(
+          `UPDATE users SET is_active = 0 WHERE id IN (${placeholders4}) AND user_type = 'voter'`,
+          voterIds
+        );
+        message = `${result.affectedRows} voters deactivated`;
+        break;
+
+      case "remove":
+        if (!sessionId) {
+          return res.status(400).json({
+            success: false,
+            message: "Session ID is required for remove action",
+          });
+        }
+        const placeholders5 = voterIds.map(() => "?").join(",");
+        [result] = await pool.execute(
+          `DELETE FROM session_voters WHERE session_id = ? AND voter_id IN (${placeholders5})`,
+          [sessionId, ...voterIds]
+        );
+        message = `${result.affectedRows} voters removed from session`;
+        break;
+    }
+
+    res.json({
+      success: true,
+      message,
+      affected_rows: result.affectedRows,
+    });
+  } catch (error) {
+    console.error("Bulk voter actions error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to perform bulk action",
+    });
+  }
+};
+
+// Export voter data to CSV
+const exportVoters = async (req, res) => {
+  try {
+    const { sessionId, format = "csv" } = req.query;
+
+    let query;
+    let queryParams = [];
+
+    if (sessionId) {
+      // Export voters for specific session
+      query = `
+        SELECT u.first_name, u.last_name, u.email, u.wallet_address,
+               CASE WHEN u.is_verified = 1 THEN 'Approved' ELSE 'Pending' END as status,
+               CASE WHEN u.is_active = 1 THEN 'Active' ELSE 'Inactive' END as account_status,
+               sv.has_voted, sv.voted_at, u.created_at
+        FROM session_voters sv
+        JOIN users u ON sv.voter_id = u.id
+        WHERE sv.session_id = ?
+        ORDER BY u.last_name, u.first_name
+      `;
+      queryParams = [sessionId];
+    } else {
+      // Export all voters
+      query = `
+        SELECT u.first_name, u.last_name, u.email, u.wallet_address,
+               CASE WHEN u.is_verified = 1 THEN 'Approved' ELSE 'Pending' END as status,
+               CASE WHEN u.is_active = 1 THEN 'Active' ELSE 'Inactive' END as account_status,
+               COUNT(sv.session_id) as sessions_count,
+               COUNT(CASE WHEN sv.has_voted = 1 THEN 1 END) as votes_cast,
+               u.created_at
+        FROM users u
+        LEFT JOIN session_voters sv ON u.id = sv.voter_id
+        WHERE u.user_type = 'voter'
+        GROUP BY u.id
+        ORDER BY u.last_name, u.first_name
+      `;
+    }
+
+    const [voters] = await pool.execute(query, queryParams);
+
+    if (format === "csv") {
+      // Generate CSV
+      let csv = "";
+      if (voters.length > 0) {
+        // CSV headers
+        const headers = Object.keys(voters[0]).join(",");
+        csv += headers + "\n";
+
+        // CSV data
+        voters.forEach((voter) => {
+          const row = Object.values(voter)
+            .map((value) => {
+              // Escape commas and quotes in CSV
+              if (value === null || value === undefined) return "";
+              const str = String(value);
+              if (
+                str.includes(",") ||
+                str.includes('"') ||
+                str.includes("\n")
+              ) {
+                return `"${str.replace(/"/g, '""')}"`;
+              }
+              return str;
+            })
+            .join(",");
+          csv += row + "\n";
+        });
+      }
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="voters-${sessionId || "all"}-${
+          new Date().toISOString().split("T")[0]
+        }.csv"`
+      );
+      res.send(csv);
+    } else {
+      // Return JSON
+      res.json({
+        success: true,
+        voters,
+        total: voters.length,
+        exported_at: new Date().toISOString(),
+      });
+    }
+  } catch (error) {
+    console.error("Export voters error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to export voters",
+    });
+  }
+};
+
+// Get voter audit log
+const getVoterAuditLog = async (req, res) => {
+  try {
+    const { voterId } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+    const offset = (page - 1) * limit;
+
+    // Get audit log for voter (we'll need to create this table first)
+    // For now, return basic activity data
+    const [activities] = await pool.execute(
+      `SELECT 
+        'session_join' as action,
+        vs.title as description,
+        sv.created_at as timestamp,
+        'info' as type
+       FROM session_voters sv
+       JOIN voting_sessions vs ON sv.session_id = vs.id
+       WHERE sv.voter_id = ?
+       
+       UNION ALL
+       
+       SELECT 
+        'vote_cast' as action,
+        CONCAT('Voted in: ', vs.title) as description,
+        sv.voted_at as timestamp,
+        'success' as type
+       FROM session_voters sv
+       JOIN voting_sessions vs ON sv.session_id = vs.id
+       WHERE sv.voter_id = ? AND sv.has_voted = 1
+       
+       ORDER BY timestamp DESC
+       LIMIT ? OFFSET ?`,
+      [voterId, voterId, parseInt(limit), parseInt(offset)]
+    );
+
+    // Get total count
+    const [countResult] = await pool.execute(
+      `SELECT 
+        (SELECT COUNT(*) FROM session_voters WHERE voter_id = ?) +
+        (SELECT COUNT(*) FROM session_voters WHERE voter_id = ? AND has_voted = 1)
+        as total`,
+      [voterId, voterId]
+    );
+
+    res.json({
+      success: true,
+      activities,
+      pagination: {
+        current_page: parseInt(page),
+        per_page: parseInt(limit),
+        total: countResult[0].total,
+        total_pages: Math.ceil(countResult[0].total / limit),
+      },
+    });
+  } catch (error) {
+    console.error("Get voter audit log error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch voter audit log",
     });
   }
 };
@@ -514,16 +919,16 @@ const updateSession = async (req, res) => {
     const { title, description, endDate, isActive } = req.body;
     const adminId = req.user.id;
 
-    // Verify admin owns this session
+    // Admin users can update any session in the system
     const [sessions] = await pool.execute(
-      `SELECT id FROM voting_sessions WHERE id = ? AND admin_id = ?`,
-      [sessionId, adminId]
+      `SELECT id FROM voting_sessions WHERE id = ?`,
+      [sessionId]
     );
 
     if (sessions.length === 0) {
       return res.status(404).json({
         success: false,
-        message: "Session not found or access denied",
+        message: "Session not found",
       });
     }
 
@@ -575,14 +980,86 @@ const updateSession = async (req, res) => {
   }
 };
 
+// Get sessions for a voter
+const getVoterSessions = async (req, res) => {
+  try {
+    const voterId = req.user.id;
+    const { page = 1, limit = 10, status = "all" } = req.query;
+    const offset = (page - 1) * limit;
+
+    let whereClause = "WHERE sv.voter_id = ? AND u.is_verified = TRUE";
+    let queryParams = [voterId];
+
+    if (status === "active") {
+      whereClause += " AND vs.is_active = TRUE AND vs.end_date > NOW()";
+    } else if (status === "upcoming") {
+      whereClause += " AND vs.start_date > NOW()";
+    } else if (status === "completed") {
+      whereClause += " AND vs.end_date <= NOW()";
+    }
+
+    // Get sessions the voter is authorized for
+    const [sessions] = await pool.execute(
+      `SELECT vs.*, 
+              u.first_name as admin_first_name, 
+              u.last_name as admin_last_name,
+              sv.has_voted,
+              sv.voted_at,
+              COUNT(DISTINCT sv2.voter_id) as total_voters,
+              COUNT(DISTINCT CASE WHEN sv2.has_voted = TRUE THEN sv2.voter_id END) as votes_cast
+       FROM voting_sessions vs
+       JOIN session_voters sv ON vs.id = sv.session_id
+       JOIN users u ON vs.admin_id = u.id
+       LEFT JOIN session_voters sv2 ON vs.id = sv2.session_id
+       ${whereClause}
+       GROUP BY vs.id, sv.has_voted, sv.voted_at
+       ORDER BY vs.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...queryParams, parseInt(limit), parseInt(offset)]
+    );
+
+    // Get total count for pagination
+    const [countResult] = await pool.execute(
+      `SELECT COUNT(DISTINCT vs.id) as total 
+       FROM voting_sessions vs
+       JOIN session_voters sv ON vs.id = sv.session_id
+       JOIN users u ON vs.admin_id = u.id
+       ${whereClause}`,
+      queryParams
+    );
+
+    res.json({
+      success: true,
+      sessions,
+      pagination: {
+        current_page: parseInt(page),
+        per_page: parseInt(limit),
+        total: countResult[0].total,
+        total_pages: Math.ceil(countResult[0].total / limit),
+      },
+    });
+  } catch (error) {
+    console.error("Get voter sessions error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch voter sessions",
+    });
+  }
+};
+
 module.exports = {
   createSession,
   getAdminSessions,
+  getVoterSessions,
   getSessionDetails,
   uploadVoters,
   upload,
+  getSessionVoters,
   getAllVoters,
   approveVoters,
   toggleVoterStatus,
   updateSession,
+  bulkVoterActions,
+  exportVoters,
+  getVoterAuditLog,
 };
