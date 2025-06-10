@@ -7,18 +7,23 @@ USE voting_system;
 CREATE TABLE users (
     id INT AUTO_INCREMENT PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL,
-    first_name VARCHAR(100) NOT NULL,
-    last_name VARCHAR(100) NOT NULL,
+    password_hash VARCHAR(255) NULL, -- Allow NULL for unregistered voters
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
     user_type ENUM('voter', 'admin') DEFAULT 'voter',
     wallet_address VARCHAR(42) NULL,
     is_verified BOOLEAN DEFAULT FALSE,
     is_active BOOLEAN DEFAULT TRUE,
+    is_registered BOOLEAN DEFAULT FALSE, -- Track if voter has completed registration
+    registration_token VARCHAR(64) NULL, -- Token for voter registration
+    registration_token_expires TIMESTAMP NULL, -- Expiration for registration token
+    last_login TIMESTAMP NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_email (email),
     INDEX idx_user_type (user_type),
-    INDEX idx_wallet_address (wallet_address)
+    INDEX idx_wallet_address (wallet_address),
+    INDEX idx_registration_token (registration_token)
 );
 
 -- Voting sessions table
@@ -65,6 +70,6 @@ CREATE TABLE session_voters (
 );
 
 -- Insert default admin user
-INSERT INTO users (email, password, first_name, last_name, user_type, is_verified) 
-VALUES ('admin@voting.com', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewKyNi8fjKdGAixO', 'Admin', 'User', 'admin', TRUE);
+INSERT INTO users (email, password_hash, first_name, last_name, user_type, is_verified, is_registered) 
+VALUES ('admin@voting.com', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewKyNi8fjKdGAixO', 'Admin', 'User', 'admin', TRUE, TRUE);
 -- Default password is 'admin123' (hashed)

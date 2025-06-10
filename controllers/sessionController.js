@@ -3,6 +3,8 @@ const multer = require("multer");
 const csv = require("csv-parser");
 const fs = require("fs");
 const path = require("path");
+const { generateRegistrationToken } = require("./authController");
+const { sendRegistrationEmail } = require("../services/emailService");
 
 // Configure multer for CSV file uploads
 const storage = multer.diskStorage({
@@ -36,6 +38,7 @@ const createSession = async (req, res) => {
   try {
     const { title, description, endDate } = req.body;
     const adminId = req.user.id;
+    //console.log(adminId);
 
     // Validate required fields
     if (!title || !endDate) {
@@ -53,6 +56,7 @@ const createSession = async (req, res) => {
         message: "End date must be in the future",
       });
     }
+    //console.log(endDate)
 
     // Insert session into database
     const [result] = await pool.execute(
@@ -86,53 +90,68 @@ const createSession = async (req, res) => {
   }
 };
 
-// Get all sessions for an admin
+// Get all sessions for an admin (Alternative simpler version)
 const getAdminSessions = async (req, res) => {
   try {
-    const adminId = req.user.id;
     const { page = 1, limit = 10, status = "all" } = req.query;
-    const offset = (page - 1) * limit;
 
-    // Admin users can see ALL sessions in the system, not just their own
-    let whereClause = "WHERE 1=1";
+    // Ensure valid numbers
+    const pageNum = parseInt(page) || 1;
+    const limitNum = parseInt(limit) || 10;
+    const offset = (pageNum - 1) * limitNum;
+
+    let baseQuery = `
+      SELECT vs.id, vs.title, vs.description, vs.admin_id, vs.start_date, 
+             vs.end_date, vs.contract_address, vs.is_active, vs.created_at, vs.updated_at,
+             COUNT(DISTINCT sv.voter_id) as voter_count,
+             COUNT(DISTINCT CASE WHEN sv.has_voted = 1 THEN sv.voter_id END) as votes_cast
+      FROM voting_sessions vs
+      LEFT JOIN session_voters sv ON vs.id = sv.session_id`;
+
+    let whereConditions = [];
     let queryParams = [];
 
+    // Add status filters
     if (status === "active") {
-      whereClause += " AND vs.is_active = TRUE AND vs.end_date > NOW()";
+      whereConditions.push("vs.is_active = 1");
+      whereConditions.push("vs.end_date > NOW()");
     } else if (status === "ended") {
-      whereClause += " AND vs.end_date <= NOW()";
+      whereConditions.push("vs.end_date <= NOW()");
     } else if (status === "inactive") {
-      whereClause += " AND vs.is_active = FALSE";
+      whereConditions.push("vs.is_active = 0");
     }
 
-    // Get sessions with voter count
-    const [sessions] = await pool.execute(
-      `SELECT vs.*, 
-              COUNT(DISTINCT sv.voter_id) as voter_count,
-              COUNT(DISTINCT CASE WHEN sv.has_voted = TRUE THEN sv.voter_id END) as votes_cast
-       FROM voting_sessions vs
-       LEFT JOIN session_voters sv ON vs.id = sv.session_id
-       ${whereClause}
-       GROUP BY vs.id
-       ORDER BY vs.created_at DESC
-       LIMIT ? OFFSET ?`,
-      [...queryParams, parseInt(limit), parseInt(offset)]
-    );
+    // Build final query
+    if (whereConditions.length > 0) {
+      baseQuery += " WHERE " + whereConditions.join(" AND ");
+    }
 
-    // Get total count for pagination
-    const [countResult] = await pool.execute(
-      `SELECT COUNT(*) as total FROM voting_sessions vs ${whereClause}`,
-      queryParams
-    );
+    baseQuery += `
+      GROUP BY vs.id, vs.title, vs.description, vs.admin_id, vs.start_date, 
+               vs.end_date, vs.contract_address, vs.is_active, vs.created_at, vs.updated_at
+      ORDER BY vs.created_at DESC
+      LIMIT ${limitNum} OFFSET ${offset}`;
+
+    // Execute main query
+    const [sessions] = await pool.execute(baseQuery, queryParams);
+
+    // Get total count
+    let countQuery =
+      "SELECT COUNT(DISTINCT vs.id) as total FROM voting_sessions vs";
+    if (whereConditions.length > 0) {
+      countQuery += " WHERE " + whereConditions.join(" AND ");
+    }
+
+    const [countResult] = await pool.execute(countQuery, queryParams);
 
     res.json({
       success: true,
       sessions,
       pagination: {
-        current_page: parseInt(page),
-        per_page: parseInt(limit),
+        current_page: pageNum,
+        per_page: limitNum,
         total: countResult[0].total,
-        total_pages: Math.ceil(countResult[0].total / limit),
+        total_pages: Math.ceil(countResult[0].total / limitNum),
       },
     });
   } catch (error) {
@@ -140,6 +159,7 @@ const getAdminSessions = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch sessions",
+      error: error.message,
     });
   }
 };
@@ -212,6 +232,10 @@ const getSessionDetails = async (req, res) => {
   }
 };
 
+// Upload voters from CSV
+// ...existing code...
+
+// Upload voters from CSV
 // Upload voters from CSV
 const uploadVoters = async (req, res) => {
   try {
@@ -374,6 +398,7 @@ const uploadVoters = async (req, res) => {
     });
   }
 };
+
 
 // Get voters for a specific session
 const getSessionVoters = async (req, res) => {

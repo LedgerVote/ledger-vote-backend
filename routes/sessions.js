@@ -17,15 +17,14 @@ const {
   getVoterAuditLog,
 } = require("../controllers/sessionController");
 const { authMiddleware, adminOnly } = require("../middleware/auth");
+const { authenticateVoterToken } = require("../middleware/voterAuth");
 const { validateSession } = require("../middleware/validation");
 
-// Routes that require authentication only (both admin and voter)
+// Voter routes (require voter authentication)
+router.get("/voter/sessions", authenticateVoterToken, getVoterSessions);
+
+// Admin routes (require admin authentication)
 router.use(authMiddleware);
-
-// Voter routes (accessible by both admin and voter)
-router.get("/voter/sessions", getVoterSessions);
-
-// Admin-only routes
 router.use(adminOnly);
 
 // Session management routes
