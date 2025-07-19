@@ -79,6 +79,9 @@ public class VotingService {
         vote.setTimestamp(LocalDateTime.now());
         
         try {
+            if(vote.getTransactionHash()==null){
+                throw new Exception("Transaction hash is null");
+            }
             voteRepo.save(vote);
             System.out.println("✅ Vote saved to database");
         } catch (Exception e) {
