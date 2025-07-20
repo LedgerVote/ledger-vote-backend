@@ -5,6 +5,7 @@ public class VoteRequest {
     private String candidateName;
     private String walletAddress; // Changed from privateKey to walletAddress
     private Long sessionId;
+    private String transactionHash; // Blockchain transaction hash
     
     // getters and setters
     public String getVoterId() {
@@ -37,5 +38,13 @@ public class VoteRequest {
 
     public void setSessionId(Long sessionId) {
         this.sessionId = sessionId;
+    }
+
+    public String getTransactionHash() {
+        return transactionHash;
+    }
+
+    public void setTransactionHash(String transactionHash) {
+        this.transactionHash = transactionHash;
     }
 }

@@ -39,6 +39,9 @@ public class Vote {
     @Column(name = "wallet_address", nullable = false)
     private String walletAddress;
 
+    @Column(name = "transaction_hash")
+    private String transactionHash;
+
     // Getters and Setters
 
     public Long getId() {
@@ -87,5 +90,13 @@ public class Vote {
 
     public void setWalletAddress(String walletAddress) {
         this.walletAddress = walletAddress;
+    }
+
+    public String getTransactionHash() {
+        return transactionHash;
+    }
+
+    public void setTransactionHash(String transactionHash) {
+        this.transactionHash = transactionHash;
     }
 }

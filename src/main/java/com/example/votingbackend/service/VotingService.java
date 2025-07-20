@@ -37,6 +37,7 @@ public class VotingService {
         System.out.println("  Candidate: " + req.getCandidateName());
         System.out.println("  Session ID: " + req.getSessionId());
         System.out.println("  Wallet Address: " + req.getWalletAddress());
+        System.out.println("  Transaction Hash: " + req.getTransactionHash());
 
         // Validate voter exists
         Voter voter = voterRepo.findByVoterId(req.getVoterId())
@@ -76,6 +77,7 @@ public class VotingService {
         vote.setCandidate(candidate);
         vote.setSession(session);
         vote.setWalletAddress(req.getWalletAddress()); // Store wallet address
+        vote.setTransactionHash(req.getTransactionHash()); // Store blockchain transaction hash
         vote.setTimestamp(LocalDateTime.now());
         
         try {
@@ -100,6 +102,7 @@ public class VotingService {
         }
 
         System.out.println("✅ Vote recorded for wallet: " + req.getWalletAddress());
+        System.out.println("🔗 Blockchain transaction: " + req.getTransactionHash());
     }
 
     public Map<String, Integer> getResults() {
